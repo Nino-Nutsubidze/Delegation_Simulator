@@ -565,9 +565,7 @@ function speakText(text, btn){
     }
   }
 
-  const clean = String(text || '').replace(/[
-
-]+/g,' ').replace(/\s+/g,' ').trim();
+  PLACEHOLDER
   if(!clean) return;
 
   const utter = new SpeechSynthesisUtterance(clean);
