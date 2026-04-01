@@ -441,7 +441,7 @@ Respond naturally in 2-4 sentences. Stay measured and direct, not angry.`
 
 let cur = null, hist = [], chks = {}, observerOn = true;
 let simState = {trust:35,resistance:65,ownership:20,stage:'Opening'};
-let recognition = null, isListening = false;
+let recognition = null, isListening = false, currentUtterance = null, currentlyPlayingBtn = null;
 
 function escapeHtml(s){return (s||'').replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));}
 
@@ -497,7 +497,8 @@ function openSim(i){
 function closeSim(){
   document.getElementById('view-sim').classList.remove('active');
   document.getElementById('view-landing').style.display='block';
-  if (isListening && recognition) recognition.stop();
+  if (isListening && recognition) { isListening = false; try{ recognition.stop(); }catch(e){}; stopSpeech(); }
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
 }
 document.getElementById('bkBtn').addEventListener('click', closeSim);
 document.getElementById('rstBtn').addEventListener('click', ()=> {
@@ -549,37 +550,85 @@ function removeTyping(){ const t=document.getElementById('typ'); if(t) t.remove(
 function scroll(){ const m=document.getElementById('ms'); m.scrollTop = m.scrollHeight; }
 
 function speakText(text, btn){
-  const synth = window.speechSynthesis;
-  if(!synth || typeof SpeechSynthesisUtterance === 'undefined'){
+  if(!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined'){
     alert('Speaker playback is not supported in this browser.');
     return;
   }
-  if(currentUtterance){
+  const synth = window.speechSynthesis;
+  if(synth.speaking || synth.pending){
     synth.cancel();
-    if(currentlyPlayingBtn) currentlyPlayingBtn.classList.remove('playing');
+    currentUtterance = null;
+    document.querySelectorAll('.spk-btn').forEach(b=>b.classList.remove('playing'));
     if(currentlyPlayingBtn === btn){
-      currentUtterance = null;
       currentlyPlayingBtn = null;
       return;
     }
   }
-  const utter = new SpeechSynthesisUtterance(text.replace(/<br\s*\/?/gi,' '));
-  utter.rate = 1;
+
+  const clean = String(text || '').replace(/[
+
+]+/g,' ').replace(/\s+/g,' ').trim();
+  if(!clean) return;
+
+  const utter = new SpeechSynthesisUtterance(clean);
+  utter.rate = 0.94;
   utter.pitch = 1;
-  utter.onend = ()=>{
-    btn.classList.remove('playing');
-    if(currentlyPlayingBtn === btn) currentlyPlayingBtn = null;
+  utter.volume = 1;
+
+  const femalePrefs = ['Samantha','Karen','Moira','Tessa','Veena','Google UK English Female','Google US English Female','Microsoft Zira','Microsoft Susan','Microsoft Hazel','Fiona','Victoria'];
+  const malePrefs = ['Daniel','Alex','Fred','Tom','Google UK English Male','Google US English Male','Microsoft David','Microsoft Mark','Microsoft George','Rishi','Aaron'];
+  const isFemale = cur ? isFemaleRole(cur.aiRole) : true;
+
+  function assignBestVoice(){
+    const voices = synth.getVoices();
+    let preferred = null;
+    const prefs = isFemale ? femalePrefs : malePrefs;
+    for (const pref of prefs){
+      preferred = voices.find(v => v.name.includes(pref));
+      if (preferred) break;
+    }
+    if(!preferred){
+      preferred = voices.find(v => /^en/i.test(v.lang)) || voices[0] || null;
+    }
+    if(preferred) utter.voice = preferred;
+  }
+
+  utter.onstart = ()=>{ if(btn) btn.classList.add('playing'); };
+  utter.onend = utter.onerror = ()=>{
     currentUtterance = null;
+    if(currentlyPlayingBtn) currentlyPlayingBtn.classList.remove('playing');
+    document.querySelectorAll('.spk-btn').forEach(b=>b.classList.remove('playing'));
+    currentlyPlayingBtn = null;
   };
-  utter.onerror = ()=>{
-    btn.classList.remove('playing');
-    if(currentlyPlayingBtn === btn) currentlyPlayingBtn = null;
-    currentUtterance = null;
-  };
-  btn.classList.add('playing');
-  currentlyPlayingBtn = btn;
-  currentUtterance = utter;
-  synth.speak(utter);
+
+  function startSpeaking(){
+    assignBestVoice();
+    currentlyPlayingBtn = btn || null;
+    currentUtterance = utter;
+    try { synth.speak(utter); }
+    catch(e){
+      if(btn) btn.classList.remove('playing');
+      currentlyPlayingBtn = null;
+      currentUtterance = null;
+      alert('Speaker playback could not start in this browser.');
+    }
+  }
+
+  if(synth.getVoices().length === 0){
+    synth.onvoiceschanged = function(){
+      synth.onvoiceschanged = null;
+      startSpeaking();
+    };
+    synth.getVoices();
+    setTimeout(()=>{ if(!currentUtterance) startSpeaking(); }, 250);
+  } else {
+    startSpeaking();
+  }
+}
+
+function isFemaleRole(roleName){
+  const femaleNames = ['Hessa','Reem','Dalia','Sara','Nour','Lina','Hana','Sana','Noura','Amal','Mona','Mariam'];
+  return femaleNames.some(name => String(roleName || '').includes(name));
 }
 
 function updateMetrics(){
@@ -840,45 +889,128 @@ Be direct, specific, and grounded in the actual words used. No generic coaching 
 }
 
 /* speech input */
+let savedText = '';
+let lastFinalTime = 0;
+let punctTimer = null;
+
 function initSpeech(){
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if(!SR) return;
+  if(!SR) return false;
   recognition = new SR();
   recognition.lang = 'en-US';
-  recognition.continuous = false;
+  recognition.continuous = true;
   recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+
   recognition.onstart = () => {
     isListening = true;
-    const inp = document.getElementById('inp');
-    speechBaseText = inp.value.trim();
+    lastFinalTime = Date.now();
     document.getElementById('micBtn').classList.add('listening');
-    document.getElementById('mhint').textContent = 'Listening…';
+    document.getElementById('mhint').textContent = '🎙️ Recording - click mic again to stop';
   };
-  recognition.onend = () => {
-    isListening = false;
-    speechBaseText = '';
-    document.getElementById('micBtn').classList.remove('listening');
-    document.getElementById('mhint').textContent = '';
-  };
+
   recognition.onresult = (e) => {
-    let transcript='';
-    for(let i=0;i<e.results.length;i++){
-      transcript += e.results[i][0].transcript;
+    if (punctTimer) { clearTimeout(punctTimer); punctTimer = null; }
+    let interim = '';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      if(e.results[i].isFinal){
+        let transcript = e.results[i][0].transcript;
+        const now = Date.now();
+        const gap = now - lastFinalTime;
+        lastFinalTime = now;
+        if(savedText.length > 0){
+          const lastChar = savedText.trim().slice(-1);
+          const isPunct = '.!?,'.indexOf(lastChar) > -1;
+          if(!isPunct){
+            if(gap > 2000) savedText = savedText.trimEnd() + '. ';
+            else if(gap > 900) savedText = savedText.trimEnd() + ', ';
+          }
+        }
+        const trimmed = savedText.trimEnd();
+        if(trimmed.length === 0 || /[.!?]$/.test(trimmed)){
+          transcript = transcript.charAt(0).toUpperCase() + transcript.slice(1);
+        }
+        savedText += transcript + ' ';
+        punctTimer = setTimeout(function(){
+          if(isListening && savedText.length > 0){
+            const lc = savedText.trim().slice(-1);
+            if('.!?,'.indexOf(lc) === -1){
+              savedText = savedText.trimEnd() + '. ';
+              updateSpeechInput();
+            }
+          }
+        }, 2500);
+      } else {
+        interim += e.results[i][0].transcript;
+      }
     }
-    transcript = transcript.trim();
-    const inp=document.getElementById('inp');
-    inp.value = speechBaseText ? (speechBaseText + ' ' + transcript).trim() : transcript;
-    inp.dispatchEvent(new Event('input'));
+    updateSpeechInput(interim);
   };
+
+  recognition.onerror = (e) => {
+    if(e.error === 'no-speech') return;
+    const msgs = {
+      'not-allowed': 'Mic access denied - check browser permissions',
+      'audio-capture': 'No microphone found',
+      'network': 'Network error'
+    };
+    document.getElementById('mhint').textContent = msgs[e.error] || ('Error: ' + e.error);
+    if(e.error !== 'no-speech') stopSpeech();
+  };
+
+  recognition.onend = () => {
+    if(isListening){
+      try { recognition.start(); } catch(e) {}
+    }
+  };
+  return true;
 }
-document.getElementById('micBtn').addEventListener('click', ()=>{
-  if(!recognition){ alert('Speech input is not supported in this browser.'); return; }
-  if(isListening) recognition.stop(); else recognition.start();
+
+function updateSpeechInput(interim=''){
+  const inp = document.getElementById('inp');
+  inp.value = interim ? (savedText + interim) : savedText;
+  inp.dispatchEvent(new Event('input'));
+  document.getElementById('mhint').textContent = interim ? ('🎙️ ' + interim + '...') : '🎙️ Recording - click mic again to stop';
+}
+
+function stopSpeech(){
+  isListening = false;
+  if (punctTimer) { clearTimeout(punctTimer); punctTimer = null; }
+  document.getElementById('micBtn').classList.remove('listening');
+  document.getElementById('mhint').textContent = savedText ? 'Done - press Enter to send' : '';
+}
+
+document.getElementById('micBtn').addEventListener('click', () => {
+  if(!recognition && !initSpeech()){
+    alert('Speech input is not supported in this browser.');
+    return;
+  }
+  if(isListening){
+    isListening = false;
+    try { recognition.stop(); } catch(e) {}
+    stopSpeech();
+  } else {
+    savedText = document.getElementById('inp').value.trim();
+    if(savedText) savedText += ' ';
+    lastFinalTime = Date.now();
+    try { recognition.start(); }
+    catch(e){
+      try { recognition.abort(); } catch(ex) {}
+      setTimeout(function(){
+        try { recognition.start(); } catch(ex2) { stopSpeech(); }
+      }, 300);
+    }
+  }
 });
 
 document.addEventListener('keydown', e => {
   if(e.key === 'Escape'){
-    if(isListening && recognition) recognition.stop();
+    if(isListening && recognition){
+      isListening = false;
+      try { recognition.stop(); } catch(err) {}
+      stopSpeech();
+    }
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
     document.getElementById('ov').classList.remove('open');
   }
 });
