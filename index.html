@@ -129,6 +129,12 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:'DM Sans',sans-seri
 @keyframes pulse-m{0%,100%{box-shadow:0 0 0 0 rgba(231,76,60,.4)}50%{box-shadow:0 0 0 6px rgba(231,76,60,0)}}
 .ht2{font-size:10px;color:var(--gray);margin-top:5px;display:flex;justify-content:space-between;gap:8px}
 .mic-hint{font-size:10px;color:var(--gray);font-style:italic}
+
+.spk-btn{background:none;border:none;cursor:pointer;color:var(--gray);padding:2px 4px;border-radius:4px;opacity:0;transition:opacity .15s,color .15s;flex-shrink:0;display:flex;align-items:center}
+.mg:hover .spk-btn{opacity:1}
+.spk-btn:hover{color:var(--teal)}
+.spk-btn.playing{color:var(--teal);opacity:1}
+.msg-row{display:flex;align-items:flex-start;gap:6px}
 #apiStatus{font-size:10px;color:var(--gray);margin-top:4px;padding:0 2px}
 
 /* observer */
@@ -515,7 +521,12 @@ document.getElementById('inp').addEventListener('input', e=>{
 function addAI(t,n){
   const d=document.createElement('div');
   d.className='mg mai';
-  d.innerHTML=`<div class="av">${escapeHtml((n||'AI').split(' ').map(x=>x[0]).slice(0,2).join(''))}</div><div class="bb"><div class="mn">${escapeHtml(n)}</div>${escapeHtml(t)}</div>`;
+  const initials = escapeHtml((n||'AI').split(' ').map(x=>x[0]).slice(0,2).join(''));
+  const safeName = escapeHtml(n);
+  const safeText = escapeHtml(t).replace(/\n/g,'<br>');
+  d.innerHTML=`<div class="av">${initials}</div><div class="bb"><div class="mn">${safeName}</div><div class="msg-row"><div class="msg-text">${safeText}</div><button class="spk-btn" title="Listen to AI reply" aria-label="Listen to AI reply"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg></button></div></div>`;
+  const btn = d.querySelector('.spk-btn');
+  btn.addEventListener('click', ()=> speakText(t, btn));
   document.getElementById('ms').appendChild(d);
   scroll();
 }
@@ -536,6 +547,40 @@ function showTyping(){
 }
 function removeTyping(){ const t=document.getElementById('typ'); if(t) t.remove(); }
 function scroll(){ const m=document.getElementById('ms'); m.scrollTop = m.scrollHeight; }
+
+function speakText(text, btn){
+  const synth = window.speechSynthesis;
+  if(!synth || typeof SpeechSynthesisUtterance === 'undefined'){
+    alert('Speaker playback is not supported in this browser.');
+    return;
+  }
+  if(currentUtterance){
+    synth.cancel();
+    if(currentlyPlayingBtn) currentlyPlayingBtn.classList.remove('playing');
+    if(currentlyPlayingBtn === btn){
+      currentUtterance = null;
+      currentlyPlayingBtn = null;
+      return;
+    }
+  }
+  const utter = new SpeechSynthesisUtterance(text.replace(/<br\s*\/?/gi,' '));
+  utter.rate = 1;
+  utter.pitch = 1;
+  utter.onend = ()=>{
+    btn.classList.remove('playing');
+    if(currentlyPlayingBtn === btn) currentlyPlayingBtn = null;
+    currentUtterance = null;
+  };
+  utter.onerror = ()=>{
+    btn.classList.remove('playing');
+    if(currentlyPlayingBtn === btn) currentlyPlayingBtn = null;
+    currentUtterance = null;
+  };
+  btn.classList.add('playing');
+  currentlyPlayingBtn = btn;
+  currentUtterance = utter;
+  synth.speak(utter);
+}
 
 function updateMetrics(){
   const clamp = v => Math.max(0, Math.min(100, Math.round(v)));
@@ -804,22 +849,25 @@ function initSpeech(){
   recognition.interimResults = true;
   recognition.onstart = () => {
     isListening = true;
+    const inp = document.getElementById('inp');
+    speechBaseText = inp.value.trim();
     document.getElementById('micBtn').classList.add('listening');
     document.getElementById('mhint').textContent = 'Listening…';
   };
   recognition.onend = () => {
     isListening = false;
+    speechBaseText = '';
     document.getElementById('micBtn').classList.remove('listening');
     document.getElementById('mhint').textContent = '';
   };
   recognition.onresult = (e) => {
-    let finalText='', interim='';
-    for(let i=e.resultIndex;i<e.results.length;i++){
-      if(e.results[i].isFinal) finalText += e.results[i][0].transcript;
-      else interim += e.results[i][0].transcript;
+    let transcript='';
+    for(let i=0;i<e.results.length;i++){
+      transcript += e.results[i][0].transcript;
     }
+    transcript = transcript.trim();
     const inp=document.getElementById('inp');
-    inp.value = (inp.value ? inp.value + ' ' : '') + finalText + interim;
+    inp.value = speechBaseText ? (speechBaseText + ' ' + transcript).trim() : transcript;
     inp.dispatchEvent(new Event('input'));
   };
 }
