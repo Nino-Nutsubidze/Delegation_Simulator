@@ -482,6 +482,7 @@ function openSim(i){
   document.getElementById('ms').innerHTML = '';
   document.getElementById('rlbl').textContent = cur.keySkill;
   document.getElementById('inp').value = '';
+  savedText = '';
   document.getElementById('inp').style.height='44px';
   renderChecklist();
   updateMetrics();
@@ -497,7 +498,8 @@ function openSim(i){
 function closeSim(){
   document.getElementById('view-sim').classList.remove('active');
   document.getElementById('view-landing').style.display='block';
-  if (isListening && recognition) { isListening = false; try{ recognition.stop(); }catch(e){}; stopSpeech(); }
+  if (isListening && recognition) { isListening = false; try{ recognition.stop(); }catch(e){}; stopSpeech(true); }
+  savedText = '';
   if (window.speechSynthesis) window.speechSynthesis.cancel();
 }
 document.getElementById('bkBtn').addEventListener('click', closeSim);
@@ -555,6 +557,11 @@ function speakText(text, btn){
     return;
   }
   const synth = window.speechSynthesis;
+  if(isListening && recognition){
+    isListening = false;
+    try { recognition.stop(); } catch(e) {}
+    stopSpeech(true);
+  }
   if(synth.speaking || synth.pending){
     synth.cancel();
     currentUtterance = null;
@@ -565,7 +572,15 @@ function speakText(text, btn){
     }
   }
 
-  PLACEHOLDER
+    const clean = String(text || '')
+    .replace(/<br\s*\/?/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
   if(!clean) return;
 
   const utter = new SpeechSynthesisUtterance(clean);
@@ -733,6 +748,12 @@ async function send(){
   const text=ip.value.trim();
   if(!text || !cur) return;
   const btn=document.getElementById('snb');
+  if(isListening && recognition){
+    isListening = false;
+    try { recognition.stop(); } catch(e) {}
+    stopSpeech(true);
+  }
+  savedText = '';
   ip.value=''; ip.style.height='44px'; btn.disabled=true;
   addMe(text); hist.push({role:'user', content:text});
 
@@ -971,11 +992,15 @@ function updateSpeechInput(interim=''){
   document.getElementById('mhint').textContent = interim ? ('🎙️ ' + interim + '...') : '🎙️ Recording - click mic again to stop';
 }
 
-function stopSpeech(){
+function stopSpeech(preserveHint=false){
   isListening = false;
   if (punctTimer) { clearTimeout(punctTimer); punctTimer = null; }
   document.getElementById('micBtn').classList.remove('listening');
-  document.getElementById('mhint').textContent = savedText ? 'Done - press Enter to send' : '';
+  if(!preserveHint){
+    document.getElementById('mhint').textContent = savedText ? 'Done - press Enter to send' : '';
+  } else {
+    document.getElementById('mhint').textContent = '';
+  }
 }
 
 document.getElementById('micBtn').addEventListener('click', () => {
@@ -988,6 +1013,12 @@ document.getElementById('micBtn').addEventListener('click', () => {
     try { recognition.stop(); } catch(e) {}
     stopSpeech();
   } else {
+    if (window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {
+      window.speechSynthesis.cancel();
+      document.querySelectorAll('.spk-btn').forEach(b=>b.classList.remove('playing'));
+      currentlyPlayingBtn = null;
+      currentUtterance = null;
+    }
     savedText = document.getElementById('inp').value.trim();
     if(savedText) savedText += ' ';
     lastFinalTime = Date.now();
